@@ -1,120 +1,95 @@
-import os
 import pandas as pd
-import numpy as np
 
-# Шлях до папки, де лежать файли
-DATA_FOLDER = "/Users/maksymkhodakov/BIProjectLab1/BIProjectLab1/archive"
-
-# "Еталонний" порядок колонок
-STANDARD_COLUMNS = [
-    "Id", "Name", "Authors", "ISBN", "Publisher",
-    "PublishYear", "PublishMonth", "PublishDay",
-    "Language", "pagesNumber",
-    "Rating", "RatingDistTotal", "RatingDist1",
-    "RatingDist2", "RatingDist3", "RatingDist4",
-    "RatingDist5", "CountsOfReview"
-]
+EXCEL_FILE = "BI_Lab1_data_source.xlsx"
 
 
-def load_books_data(data_folder=DATA_FOLDER):
+def load_books_data_from_excel(excel_file=EXCEL_FILE, sheet_name=0):
     """
-    Функція для пошуку і зчитування всіх CSV-файлів із назвою book...csv
-    Повертає єдиний DataFrame з уніфікованими колонками STANDARD_COLUMNS
+    Зчитує дані з одного Excel-файлу (аркуш sheet_name).
+    Повертає DataFrame з потрібними колонками (RatingDist1..5, Rating, і т.д.).
     """
-    # 1. Знаходимо всі файли, що починаються на 'book' та закінчуються .csv
-    all_files = [
-        f for f in os.listdir(data_folder)
-        if f.startswith("book") and f.endswith(".csv")
+    df = pd.read_excel(excel_file, sheet_name=sheet_name)
+
+    # 1) Замінимо кому на крапку в Rating (наприклад, "4,57" -> "4.57" -> float).
+    if 'Rating' in df.columns:
+        df['Rating'] = (df['Rating'].astype(str)
+                        .str.replace(",", ".", regex=False)
+                        .astype(float))
+
+    # 2) Приведемо числові колонки до int/float
+    numeric_cols = [
+        "RatingDist1", "RatingDist2", "RatingDist3",
+        "RatingDist4", "RatingDist5", "CountsOfReview",
+        "PublishDay", "PublishMonth", "PublishYear"
     ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    df_list = []
+    # 3) Створимо RatingDistTotal, якщо його немає
+    if "RatingDistTotal" not in df.columns:
+        df["RatingDistTotal"] = df[["RatingDist1", "RatingDist2",
+                                    "RatingDist3", "RatingDist4",
+                                    "RatingDist5"]].sum(axis=1)
 
-    for file_name in all_files:
-        file_path = os.path.join(data_folder, file_name)
-        print(f"Loading {file_path}...")
-
-        # 2. Зчитуємо CSV
-        #    on_bad_lines='skip' – щоб пропустити проблемні рядки (за потреби)
-        tmp_df = pd.read_csv(file_path, on_bad_lines='skip', low_memory=False)
-
-        # 3. Визначимо, які колонки є у файлі, а які відсутні
-        existing_cols = tmp_df.columns
-
-        # 4. Додамо відсутні колонки як NaN, щоб можна було впорядкувати
-        for col in STANDARD_COLUMNS:
-            if col not in existing_cols:
-                tmp_df[col] = np.nan
-
-        # 5. Тепер впорядковуємо колонки строго за STANDARD_COLUMNS
-        tmp_df = tmp_df[STANDARD_COLUMNS]
-
-        # 6. Додаємо цей DataFrame до списку
-        df_list.append(tmp_df)
-
-    if len(df_list) == 0:
-        print("No book CSV files found!")
-        return pd.DataFrame(columns=STANDARD_COLUMNS)
-
-    # 7. Об'єднуємо всі CSV в один DataFrame
-    all_books_df = pd.concat(df_list, ignore_index=True)
-    print(f"Total rows in all_books_df: {len(all_books_df)}")
-
-    # Додаткові кроки з очищення, якщо треба:
-    # - Видалення дублікатів
-    # - Перетворення типів (PublishYear -> int, pagesNumber -> int і т.д.)
-
-    return all_books_df
+    return df
 
 
-def load_user_ratings(data_folder=DATA_FOLDER):
-    # Визначимо бажані колонки (будемо перейменовувати з ID -> UserID, ...)
-    rename_map = {
-        "ID": "UserID",
-        "Name": "SomeName",
-        "Rating": "UserRating"
-    }
+# -----------------------------
+# 1. Завантаження даних
+# -----------------------------
+books_df = load_books_data_from_excel(EXCEL_FILE)
+print("Загальні колонки:", books_df.columns.tolist())
+print("Перші рядки:\n", books_df.head())
 
-    all_files = [
-        f for f in os.listdir(data_folder)
-        if f.startswith("user_rating_") and f.endswith(".csv")
-    ]
+# -----------------------------
+# 2. Приклад створення Pivot-таблиць у pandas
+# -----------------------------
 
-    df_list = []
-    for file_name in all_files:
-        file_path = os.path.join(data_folder, file_name)
-        print(f"Loading {file_path}...")
+# Pivot A: Середній рейтинг (Rating) за роком публікації (PublishYear) та мовою (Language)
+pivot_rating_year_language = pd.pivot_table(
+    data=books_df,
+    values='Rating',
+    index='PublishYear',
+    columns='Language',
+    aggfunc='mean'
+)
+print("\nPivot A: Середній рейтинг (mean) за PublishYear x Language:\n", pivot_rating_year_language.head())
+pivot_rating_year_language.to_csv("pivot_rating_year_language.csv", index=True)
 
-        tmp_df = pd.read_csv(file_path, on_bad_lines='skip', low_memory=False)
+# Pivot B: Кількість рецензій (CountsOfReview) за видавцем (Publisher) та роком
+if "CountsOfReview" in books_df.columns:
+    pivot_reviews_pub_year = pd.pivot_table(
+        data=books_df,
+        values='CountsOfReview',
+        index='Publisher',
+        columns='PublishYear',
+        aggfunc='sum'
+    ).fillna(0)
+    print("\nPivot B: Сума CountsOfReview за Publisher x PublishYear:\n", pivot_reviews_pub_year.head())
+    pivot_reviews_pub_year.to_csv("pivot_reviews_pub_year.csv", index=True)
 
-        # Перейменовуємо
-        tmp_df = tmp_df.rename(columns=rename_map)
+# Pivot C: Сума RatingDistTotal (кількість оцінок) по (Language) і (PublishYear)
+if "RatingDistTotal" in books_df.columns:
+    pivot_rdist_lang_year = pd.pivot_table(
+        data=books_df,
+        values='RatingDistTotal',
+        index='Language',
+        columns='PublishYear',
+        aggfunc='sum'
+    ).fillna(0)
+    print("\nPivot C: Сумарна RatingDistTotal за Language x PublishYear:\n", pivot_rdist_lang_year.head())
+    pivot_rdist_lang_year.to_csv("pivot_rdist_lang_year.csv", index=True)
 
-        # Якщо раптом бракує якихось колонок - додаємо
-        for col in rename_map.values():
-            if col not in tmp_df.columns:
-                tmp_df[col] = np.nan
+# Додатково створимо поле для (Year-Month)
+books_df['PublishYearMonth'] = books_df['PublishYear'].astype(str) + "-" + books_df['PublishMonth'].astype(str)
+pivot_rating_month = pd.pivot_table(
+    data=books_df,
+    values='Rating',
+    index='PublishYearMonth',
+    aggfunc='mean'
+).sort_index()
+print("\nPivot D: Середній рейтинг (mean) за PublishYearMonth:\n", pivot_rating_month.head())
+pivot_rating_month.to_csv("pivot_rating_yearmonth.csv", index=True)
 
-        # Залишимо тільки три колонки
-        tmp_df = tmp_df[list(rename_map.values())]
-
-        df_list.append(tmp_df)
-
-    if len(df_list) == 0:
-        print("No user_rating_ CSV files found!")
-        return pd.DataFrame(columns=list(rename_map.values()))
-
-    all_user_ratings_df = pd.concat(df_list, ignore_index=True)
-
-    print(f"Total rows in all_user_ratings_df: {len(all_user_ratings_df)}")
-    return all_user_ratings_df
-
-
-# Викликаємо
-user_ratings_df = load_user_ratings(DATA_FOLDER)
-print("Final user_ratings_df columns:", user_ratings_df.columns.tolist())
-print(user_ratings_df.head())
-
-# Викликаємо функцію
-books_df = load_books_data(DATA_FOLDER)
-print("Final books_df columns:", books_df.columns.tolist())
-print(books_df.head())
+print("\n--- ЗВЕДЕНІ ТАБЛИЦІ СТВОРЕНО ТА ЗБЕРЕЖЕНО У CSV ---")
